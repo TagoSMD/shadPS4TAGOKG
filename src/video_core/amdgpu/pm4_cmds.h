@@ -36,6 +36,8 @@ union PM4Type0Header {
 };
 
 union PM4Type3Header {
+    static constexpr u32 TYPE = 3;
+
     constexpr PM4Type3Header(PM4ItOpcode code, u32 num_words_min_one,
                              PM4ShaderType stype = PM4ShaderType::ShaderGraphics,
                              PM4Predicate pred = PM4Predicate::PredDisable) {
@@ -187,6 +189,11 @@ struct PM4CmdSetData {
         BitField<28, 4, u32> index;      ///< Index for UCONFIG/CONTEXT on CI+
                                          ///< Program to zero for other opcodes and on SI
     };
+    u32 data[0];
+
+    [[nodiscard]] u32 Size() const {
+        return header.count << 2u;
+    }
 
     template <PM4ShaderType type = PM4ShaderType::ShaderGraphics, typename... Args>
     static constexpr u32* SetContextReg(u32* cmdbuf, Args... data) {
@@ -206,6 +213,7 @@ struct PM4CmdNop {
     enum PayloadType : u32 {
         DebugMarkerPush = 0x68750001u,      ///< Begin of GPU event scope
         DebugMarkerPop = 0x68750002u,       ///< End of GPU event scope
+        DebugSetMarker = 0x68750003u,       ///< Set GPU event marker
         SetVsharpInUdata = 0x68750004u,     ///< Indicates that V# will be set in the next packet
         SetTsharpInUdata = 0x68750005u,     ///< Indicates that T# will be set in the next packet
         SetSsharpInUdata = 0x68750006u,     ///< Indicates that S# will be set in the next packet
@@ -305,25 +313,26 @@ struct PM4CmdEventWriteEop {
         return data_lo | u64(data_hi) << 32;
     }
 
-    void SignalFence() const {
+    void SignalFence(auto&& write_mem) const {
+        u32* address = Address<u32>();
         switch (data_sel.Value()) {
         case DataSelect::None: {
             break;
         }
         case DataSelect::Data32Low: {
-            *Address<u32>() = DataDWord();
+            write_mem(address, DataDWord(), sizeof(u32));
             break;
         }
         case DataSelect::Data64: {
-            *Address<u64>() = DataQWord();
+            write_mem(address, DataQWord(), sizeof(u64));
             break;
         }
         case DataSelect::GpuClock64: {
-            *Address<u64>() = GetGpuClock64();
+            write_mem(address, GetGpuClock64(), sizeof(u64));
             break;
         }
         case DataSelect::PerfCounter: {
-            *Address<u64>() = Common::FencedRDTSC();
+            write_mem(address, Common::FencedRDTSC(), sizeof(u64));
             break;
         }
         default: {
@@ -348,6 +357,16 @@ struct PM4CmdEventWriteEop {
         }
         }
     }
+};
+
+struct PM4CmdAcquireMem {
+    PM4Type3Header header;
+    u32 cp_coher_cntl;
+    u32 cp_coher_size_lo;
+    u32 cp_coher_size_hi;
+    u32 cp_coher_base_lo;
+    u32 cp_coher_base_hi;
+    u32 poll_interval;
 };
 
 enum class DmaDataDst : u32 {
@@ -383,6 +402,20 @@ struct PM4DmaData {
     u32 dst_addr_lo;
     u32 dst_addr_hi;
     u32 command;
+
+    template <typename T>
+    T SrcAddress() const {
+        return std::bit_cast<T>(src_addr_lo | u64(src_addr_hi) << 32);
+    }
+
+    template <typename T>
+    T DstAddress() const {
+        return std::bit_cast<T>(dst_addr_lo | u64(dst_addr_hi) << 32);
+    }
+
+    u32 NumBytes() const noexcept {
+        return command & 0x1fffff;
+    }
 };
 
 struct PM4CmdWaitRegMem {
@@ -414,7 +447,7 @@ struct PM4CmdWaitRegMem {
 
     template <typename T = u32*>
     T Address() const {
-        return reinterpret_cast<T>((uintptr_t(poll_addr_hi) << 32) | poll_addr_lo);
+        return std::bit_cast<T>((uintptr_t(poll_addr_hi) << 32) | poll_addr_lo);
     }
 
     bool Test() const {
@@ -467,6 +500,10 @@ struct PM4CmdWriteData {
     };
     u32 data[0];
 
+    u32 Size() const {
+        return (header.count.Value() - 2) * 4;
+    }
+
     template <typename T>
     void Address(T addr) {
         addr64 = static_cast<u64>(addr);
@@ -481,7 +518,7 @@ struct PM4CmdWriteData {
 struct PM4CmdEventWriteEos {
     enum class Command : u32 {
         GdsStore = 1u,
-        SingalFence = 2u,
+        SignalFence = 2u,
     };
 
     PM4Type3Header header;
@@ -512,11 +549,11 @@ struct PM4CmdEventWriteEos {
         return this->data;
     }
 
-    void SignalFence() const {
+    void SignalFence(auto&& write_mem) const {
         const auto cmd = command.Value();
         switch (cmd) {
-        case Command::SingalFence: {
-            *Address() = DataDWord();
+        case Command::SignalFence: {
+            write_mem(Address(), DataDWord(), sizeof(u32));
             break;
         }
         case Command::GdsStore: {
@@ -741,14 +778,15 @@ struct PM4CmdDispatchIndirect {
     u32 dispatch_initiator; ///< Dispatch Initiator Register
 };
 
-struct PM4CmdDrawIndirect {
-    struct DrawInstancedArgs {
-        u32 vertex_count_per_instance;
-        u32 instance_count;
-        u32 start_vertex_location;
-        u32 start_instance_location;
-    };
+struct DrawIndirectArgs {
+    u32 vertex_count_per_instance;
+    u32 instance_count;
+    u32 start_vertex_location;
+    u32 start_instance_location;
+};
+static_assert(sizeof(DrawIndirectArgs) == 0x10u);
 
+struct PM4CmdDrawIndirect {
     PM4Type3Header header; ///< header
     u32 data_offset;       ///< Byte aligned offset where the required data structure starts
     union {
@@ -764,15 +802,16 @@ struct PM4CmdDrawIndirect {
     u32 draw_initiator; ///< Draw Initiator Register
 };
 
-struct PM4CmdDrawIndexIndirect {
-    struct DrawIndexInstancedArgs {
-        u32 index_count_per_instance;
-        u32 instance_count;
-        u32 start_index_location;
-        u32 base_vertex_location;
-        u32 start_instance_location;
-    };
+struct DrawIndexedIndirectArgs {
+    u32 index_count_per_instance;
+    u32 instance_count;
+    u32 start_index_location;
+    u32 base_vertex_location;
+    u32 start_instance_location;
+};
+static_assert(sizeof(DrawIndexedIndirectArgs) == 0x14u);
 
+struct PM4CmdDrawIndexIndirect {
     PM4Type3Header header; ///< header
     u32 data_offset;       ///< Byte aligned offset where the required data structure starts
     union {
@@ -780,11 +819,38 @@ struct PM4CmdDrawIndexIndirect {
         BitField<0, 16, u32> base_vtx_loc; ///< Offset where the CP will write the
                                            ///< BaseVertexLocation it fetched from memory
     };
-    union { // NOTE: this one is undocumented in AMD spec, but Gnm driver writes this field
+    union {
         u32 dw3;
         BitField<0, 16, u32> start_inst_loc; ///< Offset where the CP will write the
                                              ///< StartInstanceLocation it fetched from memory
     };
+    u32 draw_initiator; ///< Draw Initiator Register
+};
+
+struct PM4CmdDrawIndexIndirectMulti {
+    PM4Type3Header header; ///< header
+    u32 data_offset;       ///< Byte aligned offset where the required data structure starts
+    union {
+        u32 dw2;
+        BitField<0, 16, u32> base_vtx_loc; ///< Offset where the CP will write the
+                                           ///< BaseVertexLocation it fetched from memory
+    };
+    union {
+        u32 dw3;
+        BitField<0, 16, u32> start_inst_loc; ///< Offset where the CP will write the
+                                             ///< StartInstanceLocation it fetched from memory
+    };
+    union {
+        u32 dw4;
+        BitField<0, 16, u32> drawIndexLoc; ///< register offset to write the Draw Index count
+        BitField<30, 1, u32>
+            countIndirectEnable; ///< Indicates the data structure count is in memory
+        BitField<31, 1, u32>
+            drawIndexEnable; ///< Enables writing of Draw Index count to DRAW_INDEX_LOC
+    };
+    u32 count;          ///< Count of data structures to loop through before going to next packet
+    u64 countAddr;      ///< DWord aligned Address[31:2]; Valid if countIndirectEnable is set
+    u32 stride;         ///< Stride in memory from one data structure to the next
     u32 draw_initiator; ///< Draw Initiator Register
 };
 

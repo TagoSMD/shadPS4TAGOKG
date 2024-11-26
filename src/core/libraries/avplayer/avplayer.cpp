@@ -1,17 +1,13 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "avplayer.h"
-
-#include "avplayer_impl.h"
 #include "common/logging/log.h"
+#include "core/libraries/avplayer/avplayer.h"
+#include "core/libraries/avplayer/avplayer_impl.h"
 #include "core/libraries/error_codes.h"
-#include "core/libraries/kernel/thread_management.h"
 #include "core/libraries/libs.h"
 
 namespace Libraries::AvPlayer {
-
-using namespace Kernel;
 
 s32 PS4_SYSV_ABI sceAvPlayerAddSource(SceAvPlayerHandle handle, const char* filename) {
     LOG_TRACE(Lib_AvPlayer, "filename = {}", filename);
@@ -166,8 +162,8 @@ s32 PS4_SYSV_ABI sceAvPlayerInitEx(const SceAvPlayerInitDataEx* p_data,
 bool PS4_SYSV_ABI sceAvPlayerIsActive(SceAvPlayerHandle handle) {
     LOG_TRACE(Lib_AvPlayer, "called");
     if (handle == nullptr) {
-        LOG_TRACE(Lib_AvPlayer, "returning ORBIS_AVPLAYER_ERROR_INVALID_PARAMS");
-        return ORBIS_AVPLAYER_ERROR_INVALID_PARAMS;
+        LOG_TRACE(Lib_AvPlayer, "returning false");
+        return false;
     }
     const auto res = handle->IsActive();
     LOG_TRACE(Lib_AvPlayer, "returning {}", res);
@@ -309,7 +305,7 @@ void RegisterlibSceAvPlayer(Core::Loader::SymbolsResolver* sym) {
     LIB_FUNCTION("XC9wM+xULz8", "libSceAvPlayer", 1, "libSceAvPlayer", 1, 0, sceAvPlayerJumpToTime);
     LIB_FUNCTION("9y5v+fGN4Wk", "libSceAvPlayer", 1, "libSceAvPlayer", 1, 0, sceAvPlayerPause);
     LIB_FUNCTION("HD1YKVU26-M", "libSceAvPlayer", 1, "libSceAvPlayer", 1, 0, sceAvPlayerPostInit);
-    LIB_FUNCTION("agig-iDRrTE", "libSceAvPlayer", 1, "libSceAvPlayer", 1, 0, sceAvPlayerPrintf);
+    // LIB_FUNCTION("agig-iDRrTE", "libSceAvPlayer", 1, "libSceAvPlayer", 1, 0, sceAvPlayerPrintf);
     LIB_FUNCTION("w5moABNwnRY", "libSceAvPlayer", 1, "libSceAvPlayer", 1, 0, sceAvPlayerResume);
     LIB_FUNCTION("k-q+xOxdc3E", "libSceAvPlayer", 1, "libSceAvPlayer", 1, 0,
                  sceAvPlayerSetAvSyncMode);

@@ -3,7 +3,10 @@
 
 set(BUILD_SHARED_LIBS OFF)
 set(BUILD_TESTING OFF)
-set_property(DIRECTORY PROPERTY EXCLUDE_FROM_ALL ON)
+set_directory_properties(PROPERTIES
+    EXCLUDE_FROM_ALL ON
+    SYSTEM ON
+)
 
 if (MSVC)
     # Silence "deprecation" warnings
@@ -13,11 +16,8 @@ endif()
 # Boost
 if (NOT TARGET Boost::headers)
     set(BOOST_ROOT "${CMAKE_SOURCE_DIR}/externals/ext-boost" CACHE STRING "")
-    set(Boost_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/externals/ext-boost" CACHE STRING "")
     set(Boost_NO_SYSTEM_PATHS ON CACHE BOOL "")
-    add_library(boost INTERFACE)
-    target_include_directories(boost SYSTEM INTERFACE ${Boost_INCLUDE_DIR})
-    add_library(Boost::headers ALIAS boost)
+    add_subdirectory(ext-boost)
 endif()
 
 # fmtlib
@@ -47,14 +47,21 @@ if (NOT TARGET FFmpeg::ffmpeg)
     add_library(FFmpeg::ffmpeg ALIAS ffmpeg)
 endif()
 
+# LibAtrac9
+file(GLOB LIBATRAC9_SOURCES LibAtrac9/C/src/*.c)
+add_library(LibAtrac9 STATIC ${LIBATRAC9_SOURCES})
+target_include_directories(LibAtrac9 INTERFACE LibAtrac9/C/src)
+
 # Zlib-Ng
 if (NOT TARGET zlib-ng::zlib)
     set(ZLIB_ENABLE_TESTS OFF)
     set(WITH_GTEST OFF)
     set(WITH_NEW_STRATEGIES ON)
     set(WITH_NATIVE_INSTRUCTIONS ON)
+    set(ZLIB_COMPAT ON CACHE BOOL "" FORCE)
     add_subdirectory(zlib-ng)
     add_library(zlib-ng::zlib ALIAS zlib)
+    add_library(ZLIB::ZLIB ALIAS zlib)
 endif()
 
 # SDL3
@@ -77,7 +84,7 @@ endif()
 # RenderDoc
 if (NOT TARGET RenderDoc::API)
     add_library(renderdoc INTERFACE)
-    target_include_directories(renderdoc SYSTEM INTERFACE ./renderdoc)
+    target_include_directories(renderdoc INTERFACE ./renderdoc)
     add_library(RenderDoc::API ALIAS renderdoc)
 endif()
 
@@ -141,11 +148,25 @@ if (WIN32)
     target_compile_options(sirit PUBLIC "-Wno-error=unused-command-line-argument")
 endif()
 
-if (APPLE)
-    # half
+# half
+if (NOT TARGET half::half)
     add_library(half INTERFACE)
     target_include_directories(half INTERFACE half/include)
+    add_library(half::half ALIAS half)
+endif()
 
+# libpng
+set(PNG_SHARED OFF CACHE BOOL "" FORCE)
+set(PNG_STATIC ON CACHE BOOL "" FORCE)
+set(PNG_TESTS OFF CACHE BOOL "" FORCE) 
+set(PNG_TOOLS OFF CACHE BOOL "" FORCE) 
+set(SKIP_INSTALL_ALL OFF CACHE BOOL "" FORCE)
+set(ZLIB_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/zlib-ng" CACHE STRING "" FORCE)
+set(ZLIB_LIBRARY "${CMAKE_CURRENT_BINARY_DIR}/zlib-ng/zlibstatic-ngd" CACHE STRING "" FORCE)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/libpng/zlib.h" "#include \"../zlib-ng/zlib.h\"")
+add_subdirectory(libpng)
+
+if (APPLE)
     # date
     if (NOT TARGET date::date-tz)
         option(BUILD_TZ_LIB "" ON)
@@ -178,3 +199,18 @@ option(TRACY_NO_SAMPLING "" ON)
 option(TRACY_ONLY_LOCALHOST "" ON)
 option(TRACY_NO_CONTEXT_SWITCH "" ON)
 add_subdirectory(tracy)
+
+# pugixml
+if (NOT TARGET pugixml::pugixml)
+    add_subdirectory(pugixml)
+endif()
+
+# Discord RPC
+if (ENABLE_DISCORD_RPC)
+    set(BUILD_EXAMPLES OFF)
+    add_subdirectory(discord-rpc/)
+    target_include_directories(discord-rpc INTERFACE discord-rpc/include)
+endif()
+
+# GCN Headers
+add_subdirectory(gcn)

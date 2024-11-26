@@ -26,6 +26,9 @@ public:
     QAction* downloadCheatsPatchesAct;
     QAction* dumpGameListAct;
     QAction* pkgViewerAct;
+#ifdef ENABLE_UPDATER
+    QAction* updaterAct;
+#endif
     QAction* aboutAct;
     QAction* configureAct;
     QAction* setThemeDark;
@@ -54,7 +57,7 @@ public:
     QMenu* menuSettings;
     QMenu* menuUtils;
     QMenu* menuThemes;
-    QMenu* menuAbout;
+    QMenu* menuHelp;
     QToolBar* toolBar;
 
     void setupUi(QMainWindow* MainWindow) {
@@ -107,26 +110,32 @@ public:
         setIconSizeLargeAct->setCheckable(true);
         setlistModeListAct = new QAction(MainWindow);
         setlistModeListAct->setObjectName("setlistModeListAct");
-        setlistModeListAct->setCheckable(true);
-        setlistModeListAct->setChecked(true);
         setlistModeListAct->setIcon(QIcon(":images/list_icon.png"));
+        setlistModeListAct->setCheckable(true);
         setlistModeGridAct = new QAction(MainWindow);
         setlistModeGridAct->setObjectName("setlistModeGridAct");
-        setlistModeGridAct->setCheckable(true);
         setlistModeGridAct->setIcon(QIcon(":images/grid_icon.png"));
+        setlistModeGridAct->setCheckable(true);
         setlistElfAct = new QAction(MainWindow);
-        setlistElfAct->setObjectName("setlistModeGridAct");
+        setlistElfAct->setObjectName("setlistElfAct");
         setlistElfAct->setCheckable(true);
         gameInstallPathAct = new QAction(MainWindow);
         gameInstallPathAct->setObjectName("gameInstallPathAct");
         gameInstallPathAct->setIcon(QIcon(":images/folder_icon.png"));
         downloadCheatsPatchesAct = new QAction(MainWindow);
         downloadCheatsPatchesAct->setObjectName("downloadCheatsPatchesAct");
+        downloadCheatsPatchesAct->setIcon(QIcon(":images/update_icon.png"));
         dumpGameListAct = new QAction(MainWindow);
         dumpGameListAct->setObjectName("dumpGameList");
+        dumpGameListAct->setIcon(QIcon(":images/dump_icon.png"));
         pkgViewerAct = new QAction(MainWindow);
         pkgViewerAct->setObjectName("pkgViewer");
         pkgViewerAct->setIcon(QIcon(":images/file_icon.png"));
+#ifdef ENABLE_UPDATER
+        updaterAct = new QAction(MainWindow);
+        updaterAct->setObjectName("updaterAct");
+        updaterAct->setIcon(QIcon(":images/update_icon.png"));
+#endif
         aboutAct = new QAction(MainWindow);
         aboutAct->setObjectName("aboutAct");
         aboutAct->setIcon(QIcon(":images/about_icon.png"));
@@ -184,7 +193,7 @@ public:
         settingsButton = new QPushButton(centralWidget);
         settingsButton->setFlat(true);
         settingsButton->setIcon(QIcon(":images/settings_icon.png"));
-        settingsButton->setIconSize(QSize(40, 40));
+        settingsButton->setIconSize(QSize(44, 44));
         controllerButton = new QPushButton(centralWidget);
         controllerButton->setFlat(true);
         controllerButton->setIcon(QIcon(":images/controller_icon.png"));
@@ -243,8 +252,8 @@ public:
         menuThemes = new QMenu(menuView);
         menuThemes->setObjectName("menuThemes");
         menuThemes->setIcon(QIcon(":images/themes_icon.png"));
-        menuAbout = new QMenu(menuBar);
-        menuAbout->setObjectName("menuAbout");
+        menuHelp = new QMenu(menuBar);
+        menuHelp->setObjectName("menuHelp");
         MainWindow->setMenuBar(menuBar);
         toolBar = new QToolBar(MainWindow);
         toolBar->setObjectName("toolBar");
@@ -253,7 +262,7 @@ public:
         menuBar->addAction(menuFile->menuAction());
         menuBar->addAction(menuView->menuAction());
         menuBar->addAction(menuSettings->menuAction());
-        menuBar->addAction(menuAbout->menuAction());
+        menuBar->addAction(menuHelp->menuAction());
         menuFile->addAction(bootInstallPkgAct);
         menuFile->addAction(bootGameAct);
         menuFile->addAction(addElfFolderAct);
@@ -285,7 +294,10 @@ public:
         menuUtils->addAction(downloadCheatsPatchesAct);
         menuUtils->addAction(dumpGameListAct);
         menuUtils->addAction(pkgViewerAct);
-        menuAbout->addAction(aboutAct);
+#ifdef ENABLE_UPDATER
+        menuHelp->addAction(updaterAct);
+#endif
+        menuHelp->addAction(aboutAct);
 
         retranslateUi(MainWindow);
 
@@ -299,6 +311,10 @@ public:
         bootInstallPkgAct->setText(
             QCoreApplication::translate("MainWindow", "Install Packages (PKG)", nullptr));
         bootGameAct->setText(QCoreApplication::translate("MainWindow", "Boot Game", nullptr));
+#ifdef ENABLE_UPDATER
+        updaterAct->setText(
+            QCoreApplication::translate("MainWindow", "Check for Updates", nullptr));
+#endif
         aboutAct->setText(QCoreApplication::translate("MainWindow", "About shadPS4", nullptr));
         configureAct->setText(QCoreApplication::translate("MainWindow", "Configure...", nullptr));
 #if QT_CONFIG(tooltip)
@@ -345,7 +361,7 @@ public:
         menuSettings->setTitle(QCoreApplication::translate("MainWindow", "Settings", nullptr));
         menuUtils->setTitle(QCoreApplication::translate("MainWindow", "Utils", nullptr));
         menuThemes->setTitle(QCoreApplication::translate("MainWindow", "Themes", nullptr));
-        menuAbout->setTitle(QCoreApplication::translate("MainWindow", "About", nullptr));
+        menuHelp->setTitle(QCoreApplication::translate("MainWindow", "Help", nullptr));
         setThemeDark->setText(QCoreApplication::translate("MainWindow", "Dark", nullptr));
         setThemeLight->setText(QCoreApplication::translate("MainWindow", "Light", nullptr));
         setThemeGreen->setText(QCoreApplication::translate("MainWindow", "Green", nullptr));

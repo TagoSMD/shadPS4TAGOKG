@@ -6,7 +6,9 @@
 #include <bitset>
 
 #include "common/types.h"
+#include "shader_recompiler/backend/bindings.h"
 #include "shader_recompiler/info.h"
+#include "shader_recompiler/ir/passes/srt.h"
 
 namespace Shader {
 
@@ -30,6 +32,13 @@ struct ImageSpecialization {
     auto operator<=>(const ImageSpecialization&) const = default;
 };
 
+struct FMaskSpecialization {
+    u32 width;
+    u32 height;
+
+    auto operator<=>(const FMaskSpecialization&) const = default;
+};
+
 /**
  * Alongside runtime information, this structure also checks bound resources
  * for compatibility. Can be used as a key for storing shader permutations.
@@ -37,20 +46,24 @@ struct ImageSpecialization {
  * after the first compilation of a module.
  */
 struct StageSpecialization {
-    static constexpr size_t MaxStageResources = 32;
+    static constexpr size_t MaxStageResources = 64;
 
     const Shader::Info* info;
     RuntimeInfo runtime_info;
     std::bitset<MaxStageResources> bitset{};
     boost::container::small_vector<BufferSpecialization, 16> buffers;
     boost::container::small_vector<TextureBufferSpecialization, 8> tex_buffers;
-    boost::container::small_vector<ImageSpecialization, 8> images;
-    u32 start_binding{};
+    boost::container::small_vector<ImageSpecialization, 16> images;
+    boost::container::small_vector<FMaskSpecialization, 8> fmasks;
+    Backend::Bindings start{};
 
     explicit StageSpecialization(const Shader::Info& info_, RuntimeInfo runtime_info_,
-                                 u32 start_binding_)
-        : info{&info_}, runtime_info{runtime_info_}, start_binding{start_binding_} {
+                                 Backend::Bindings start_)
+        : info{&info_}, runtime_info{runtime_info_}, start{start_} {
         u32 binding{};
+        if (info->has_readconst) {
+            binding++;
+        }
         ForEachSharp(binding, buffers, info->buffers,
                      [](auto& spec, const auto& desc, AmdGpu::Buffer sharp) {
                          spec.stride = sharp.GetStride();
@@ -62,8 +75,14 @@ struct StageSpecialization {
                      });
         ForEachSharp(binding, images, info->images,
                      [](auto& spec, const auto& desc, AmdGpu::Image sharp) {
-                         spec.type = sharp.GetType();
+                         spec.type = sharp.IsPartialCubemap() ? AmdGpu::ImageType::Color2DArray
+                                                              : sharp.GetType();
                          spec.is_integer = AmdGpu::IsInteger(sharp.GetNumberFmt());
+                     });
+        ForEachSharp(binding, fmasks, info->fmasks,
+                     [](auto& spec, const auto& desc, AmdGpu::Image sharp) {
+                         spec.width = sharp.width;
+                         spec.height = sharp.height;
                      });
     }
 
@@ -81,13 +100,19 @@ struct StageSpecialization {
     }
 
     bool operator==(const StageSpecialization& other) const {
-        if (start_binding != other.start_binding) {
+        if (start != other.start) {
             return false;
         }
         if (runtime_info != other.runtime_info) {
             return false;
         }
         u32 binding{};
+        if (info->has_readconst != other.info->has_readconst) {
+            return false;
+        }
+        if (info->has_readconst) {
+            binding++;
+        }
         for (u32 i = 0; i < buffers.size(); i++) {
             if (other.bitset[binding++] && buffers[i] != other.buffers[i]) {
                 return false;
@@ -100,6 +125,11 @@ struct StageSpecialization {
         }
         for (u32 i = 0; i < images.size(); i++) {
             if (other.bitset[binding++] && images[i] != other.images[i]) {
+                return false;
+            }
+        }
+        for (u32 i = 0; i < fmasks.size(); i++) {
+            if (other.bitset[binding++] && fmasks[i] != other.fmasks[i]) {
                 return false;
             }
         }

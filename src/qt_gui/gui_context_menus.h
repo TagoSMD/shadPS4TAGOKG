@@ -20,6 +20,7 @@
 #include <objbase.h>
 #include <shlguid.h>
 #include <shobjidl.h>
+#include <wrl/client.h>
 #endif
 #include "common/path_util.h"
 
@@ -43,20 +44,31 @@ public:
 
         // Setup menu.
         QMenu menu(widget);
+
+        // "Open Folder..." submenu
+        QMenu* openFolderMenu = new QMenu(tr("Open Folder..."), widget);
+        QAction* openGameFolder = new QAction(tr("Open Game Folder"), widget);
+        QAction* openSaveDataFolder = new QAction(tr("Open Save Data Folder"), widget);
+        QAction* openLogFolder = new QAction(tr("Open Log Folder"), widget);
+
+        openFolderMenu->addAction(openGameFolder);
+        openFolderMenu->addAction(openSaveDataFolder);
+        openFolderMenu->addAction(openLogFolder);
+
+        menu.addMenu(openFolderMenu);
+
         QAction createShortcut(tr("Create Shortcut"), widget);
-        QAction openFolder(tr("Open Game Folder"), widget);
         QAction openCheats(tr("Cheats / Patches"), widget);
         QAction openSfoViewer(tr("SFO Viewer"), widget);
         QAction openTrophyViewer(tr("Trophy Viewer"), widget);
 
-        menu.addAction(&openFolder);
         menu.addAction(&createShortcut);
         menu.addAction(&openCheats);
         menu.addAction(&openSfoViewer);
         menu.addAction(&openTrophyViewer);
 
         // "Copy" submenu.
-        QMenu* copyMenu = new QMenu(tr("Copy info"), widget);
+        QMenu* copyMenu = new QMenu(tr("Copy info..."), widget);
         QAction* copyName = new QAction(tr("Copy Name"), widget);
         QAction* copySerial = new QAction(tr("Copy Serial"), widget);
         QAction* copyNameAll = new QAction(tr("Copy All"), widget);
@@ -67,21 +79,57 @@ public:
 
         menu.addMenu(copyMenu);
 
+        // "Delete..." submenu.
+        QMenu* deleteMenu = new QMenu(tr("Delete..."), widget);
+        QAction* deleteGame = new QAction(tr("Delete Game"), widget);
+        QAction* deleteUpdate = new QAction(tr("Delete Update"), widget);
+        QAction* deleteDLC = new QAction(tr("Delete DLC"), widget);
+
+        deleteMenu->addAction(deleteGame);
+        deleteMenu->addAction(deleteUpdate);
+        deleteMenu->addAction(deleteDLC);
+
+        menu.addMenu(deleteMenu);
+
         // Show menu.
         auto selected = menu.exec(global_pos);
         if (!selected) {
             return;
         }
 
-        if (selected == &openFolder) {
-            QString folderPath = QString::fromStdString(m_games[itemID].path);
+        if (selected == openGameFolder) {
+            QString folderPath;
+            Common::FS::PathToQString(folderPath, m_games[itemID].path);
             QDesktopServices::openUrl(QUrl::fromLocalFile(folderPath));
+        }
+
+        if (selected == openSaveDataFolder) {
+            QString userPath;
+            Common::FS::PathToQString(userPath,
+                                      Common::FS::GetUserPath(Common::FS::PathType::UserDir));
+            QString saveDataPath =
+                userPath + "/savedata/1/" + QString::fromStdString(m_games[itemID].serial);
+            QDir(saveDataPath).mkpath(saveDataPath);
+            QDesktopServices::openUrl(QUrl::fromLocalFile(saveDataPath));
+        }
+
+        if (selected == openLogFolder) {
+            QString userPath;
+            Common::FS::PathToQString(userPath,
+                                      Common::FS::GetUserPath(Common::FS::PathType::UserDir));
+            QDesktopServices::openUrl(QUrl::fromLocalFile(userPath + "/log"));
         }
 
         if (selected == &openSfoViewer) {
             PSF psf;
-            if (psf.open(m_games[itemID].path + "/sce_sys/param.sfo", {})) {
-                int rows = psf.map_strings.size() + psf.map_integers.size();
+            QString game_update_path;
+            Common::FS::PathToQString(game_update_path, m_games[itemID].path.concat("-UPDATE"));
+            std::filesystem::path game_folder_path = m_games[itemID].path;
+            if (std::filesystem::exists(Common::FS::PathFromQString(game_update_path))) {
+                game_folder_path = Common::FS::PathFromQString(game_update_path);
+            }
+            if (psf.Open(game_folder_path / "sce_sys" / "param.sfo")) {
+                int rows = psf.GetEntries().size();
                 QTableWidget* tableWidget = new QTableWidget(rows, 2);
                 tableWidget->setAttribute(Qt::WA_DeleteOnClose);
                 connect(widget->parent(), &QWidget::destroyed, tableWidget,
@@ -90,23 +138,45 @@ public:
                 tableWidget->verticalHeader()->setVisible(false); // Hide vertical header
                 int row = 0;
 
-                for (const auto& pair : psf.map_strings) {
+                for (const auto& entry : psf.GetEntries()) {
                     QTableWidgetItem* keyItem =
-                        new QTableWidgetItem(QString::fromStdString(pair.first));
-                    QTableWidgetItem* valueItem =
-                        new QTableWidgetItem(QString::fromStdString(pair.second));
-
-                    tableWidget->setItem(row, 0, keyItem);
-                    tableWidget->setItem(row, 1, valueItem);
-                    keyItem->setFlags(keyItem->flags() & ~Qt::ItemIsEditable);
-                    valueItem->setFlags(valueItem->flags() & ~Qt::ItemIsEditable);
-                    row++;
-                }
-                for (const auto& pair : psf.map_integers) {
-                    QTableWidgetItem* keyItem =
-                        new QTableWidgetItem(QString::fromStdString(pair.first));
-                    QTableWidgetItem* valueItem = new QTableWidgetItem(
-                        QString("0x").append(QString::number(pair.second, 16)));
+                        new QTableWidgetItem(QString::fromStdString(entry.key));
+                    QTableWidgetItem* valueItem;
+                    switch (entry.param_fmt) {
+                    case PSFEntryFmt::Binary: {
+                        const auto bin = psf.GetBinary(entry.key);
+                        if (!bin.has_value()) {
+                            valueItem = new QTableWidgetItem(QString("Unknown"));
+                        } else {
+                            std::string text;
+                            text.reserve(bin->size() * 2);
+                            for (const auto& c : *bin) {
+                                static constexpr char hex[] = "0123456789ABCDEF";
+                                text.push_back(hex[c >> 4 & 0xF]);
+                                text.push_back(hex[c & 0xF]);
+                            }
+                            valueItem = new QTableWidgetItem(QString::fromStdString(text));
+                        }
+                    } break;
+                    case PSFEntryFmt::Text: {
+                        auto text = psf.GetString(entry.key);
+                        if (!text.has_value()) {
+                            valueItem = new QTableWidgetItem(QString("Unknown"));
+                        } else {
+                            valueItem =
+                                new QTableWidgetItem(QString::fromStdString(std::string{*text}));
+                        }
+                    } break;
+                    case PSFEntryFmt::Integer: {
+                        auto integer = psf.GetInteger(entry.key);
+                        if (!integer.has_value()) {
+                            valueItem = new QTableWidgetItem(QString("Unknown"));
+                        } else {
+                            valueItem =
+                                new QTableWidgetItem(QString("0x") + QString::number(*integer, 16));
+                        }
+                    } break;
+                    }
 
                     tableWidget->setItem(row, 0, keyItem);
                     tableWidget->setItem(row, 1, valueItem);
@@ -135,7 +205,9 @@ public:
             QString gameSerial = QString::fromStdString(m_games[itemID].serial);
             QString gameVersion = QString::fromStdString(m_games[itemID].version);
             QString gameSize = QString::fromStdString(m_games[itemID].size);
-            QPixmap gameImage(QString::fromStdString(m_games[itemID].icon_path));
+            QString iconPath;
+            Common::FS::PathToQString(iconPath, m_games[itemID].icon_path);
+            QPixmap gameImage(iconPath);
             CheatsPatches* cheatsPatches =
                 new CheatsPatches(gameName, gameSerial, gameVersion, gameSize, gameImage);
             cheatsPatches->show();
@@ -144,8 +216,9 @@ public:
         }
 
         if (selected == &openTrophyViewer) {
-            QString trophyPath = QString::fromStdString(m_games[itemID].serial);
-            QString gameTrpPath = QString::fromStdString(m_games[itemID].path);
+            QString trophyPath, gameTrpPath;
+            Common::FS::PathToQString(trophyPath, m_games[itemID].serial);
+            Common::FS::PathToQString(gameTrpPath, m_games[itemID].path);
             TrophyViewer* trophyViewer = new TrophyViewer(trophyPath, gameTrpPath);
             trophyViewer->show();
             connect(widget->parent(), &QWidget::destroyed, trophyViewer,
@@ -153,11 +226,13 @@ public:
         }
 
         if (selected == &createShortcut) {
-            QString targetPath = QString::fromStdString(m_games[itemID].path);
+            QString targetPath;
+            Common::FS::PathToQString(targetPath, m_games[itemID].path);
             QString ebootPath = targetPath + "/eboot.bin";
 
             // Get the full path to the icon
-            QString iconPath = QString::fromStdString(m_games[itemID].icon_path);
+            QString iconPath;
+            Common::FS::PathToQString(iconPath, m_games[itemID].icon_path);
             QFileInfo iconFileInfo(iconPath);
             QString icoPath = iconFileInfo.absolutePath() + "/" + iconFileInfo.baseName() + ".ico";
 
@@ -240,6 +315,54 @@ public:
                                        .arg(QString::fromStdString(m_games[itemID].size));
             clipboard->setText(combinedText);
         }
+
+        if (selected == deleteGame || selected == deleteUpdate || selected == deleteDLC) {
+            bool error = false;
+            QString folder_path, game_update_path, dlc_path;
+            Common::FS::PathToQString(folder_path, m_games[itemID].path);
+            Common::FS::PathToQString(game_update_path, m_games[itemID].path.concat("-UPDATE"));
+            Common::FS::PathToQString(
+                dlc_path, Config::getAddonInstallDir() /
+                              Common::FS::PathFromQString(folder_path).parent_path().filename());
+            QString message_type = tr("Game");
+
+            if (selected == deleteUpdate) {
+                if (!Config::getSeparateUpdateEnabled()) {
+                    QMessageBox::critical(nullptr, tr("Error"),
+                                          QString(tr("requiresEnableSeparateUpdateFolder_MSG")));
+                    error = true;
+                } else if (!std::filesystem::exists(
+                               Common::FS::PathFromQString(game_update_path))) {
+                    QMessageBox::critical(nullptr, tr("Error"),
+                                          QString(tr("This game has no update to delete!")));
+                    error = true;
+                } else {
+                    folder_path = game_update_path;
+                    message_type = tr("Update");
+                }
+            } else if (selected == deleteDLC) {
+                if (!std::filesystem::exists(Common::FS::PathFromQString(dlc_path))) {
+                    QMessageBox::critical(nullptr, tr("Error"),
+                                          QString(tr("This game has no DLC to delete!")));
+                    error = true;
+                } else {
+                    folder_path = dlc_path;
+                    message_type = tr("DLC");
+                }
+            }
+            if (!error) {
+                QString gameName = QString::fromStdString(m_games[itemID].name);
+                QDir dir(folder_path);
+                QMessageBox::StandardButton reply = QMessageBox::question(
+                    nullptr, QString(tr("Delete %1")).arg(message_type),
+                    QString(tr("Are you sure you want to delete %1's %2 directory?"))
+                        .arg(gameName, message_type),
+                    QMessageBox::Yes | QMessageBox::No);
+                if (reply == QMessageBox::Yes) {
+                    dir.removeRecursively();
+                }
+            }
+        }
     }
 
     int GetRowIndex(QTreeWidget* treeWidget, QTreeWidgetItem* item) {
@@ -283,10 +406,7 @@ public:
 
         if (selected == &installPackage) {
             QStringList pkg_app_ = m_pkg_app_list[itemIndex].split(";;");
-            std::filesystem::path path(pkg_app_[9].toStdString());
-#ifdef _WIN32
-            path = std::filesystem::path(pkg_app_[9].toStdWString());
-#endif
+            std::filesystem::path path = Common::FS::PathFromQString(pkg_app_[9]);
             InstallDragDropPkg(path, 1, 1);
         }
     }
@@ -320,9 +440,9 @@ private:
         CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
         // Create the ShellLink object
-        IShellLink* pShellLink = nullptr;
+        Microsoft::WRL::ComPtr<IShellLink> pShellLink;
         HRESULT hres = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
-                                        IID_IShellLink, (LPVOID*)&pShellLink);
+                                        IID_PPV_ARGS(&pShellLink));
         if (SUCCEEDED(hres)) {
             // Defines the path to the program executable
             pShellLink->SetPath((LPCWSTR)exePath.utf16());
@@ -331,20 +451,18 @@ private:
             pShellLink->SetWorkingDirectory((LPCWSTR)QFileInfo(exePath).absolutePath().utf16());
 
             // Set arguments, eboot.bin file location
-            QString arguments = QString("\"%1\"").arg(targetPath);
+            QString arguments = QString("-g \"%1\"").arg(targetPath);
             pShellLink->SetArguments((LPCWSTR)arguments.utf16());
 
             // Set the icon for the shortcut
             pShellLink->SetIconLocation((LPCWSTR)iconPath.utf16(), 0);
 
             // Save the shortcut
-            IPersistFile* pPersistFile = nullptr;
-            hres = pShellLink->QueryInterface(IID_IPersistFile, (LPVOID*)&pPersistFile);
+            Microsoft::WRL::ComPtr<IPersistFile> pPersistFile;
+            hres = pShellLink.As(&pPersistFile);
             if (SUCCEEDED(hres)) {
                 hres = pPersistFile->Save((LPCWSTR)linkPath.utf16(), TRUE);
-                pPersistFile->Release();
             }
-            pShellLink->Release();
         }
 
         CoUninitialize();

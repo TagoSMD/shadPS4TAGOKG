@@ -6,6 +6,7 @@
 #include <cstring>
 #include <type_traits>
 
+#include "shader_recompiler/info.h"
 #include "shader_recompiler/ir/attribute.h"
 #include "shader_recompiler/ir/basic_block.h"
 #include "shader_recompiler/ir/condition.h"
@@ -43,6 +44,7 @@ public:
     void Epilogue();
     void Discard();
     void Discard(const U1& cond);
+    void DebugPrint(const char* fmt, boost::container::small_vector<Value, 5> args);
 
     void Barrier();
     void WorkgroupMemoryBarrier();
@@ -78,7 +80,7 @@ public:
 
     [[nodiscard]] U1 Condition(IR::Condition cond);
 
-    [[nodiscard]] F32 GetAttribute(Attribute attribute, u32 comp = 0);
+    [[nodiscard]] F32 GetAttribute(Attribute attribute, u32 comp = 0, u32 index = 0);
     [[nodiscard]] U32 GetAttributeU32(Attribute attribute, u32 comp = 0);
     void SetAttribute(Attribute attribute, const F32& value, u32 comp = 0);
 
@@ -142,6 +144,8 @@ public:
     [[nodiscard]] U64 PackUint2x32(const Value& vector);
     [[nodiscard]] Value UnpackUint2x32(const U64& value);
 
+    [[nodiscard]] F64 PackFloat2x32(const Value& vector);
+
     [[nodiscard]] U32 PackFloat2x16(const Value& vector);
     [[nodiscard]] Value UnpackFloat2x16(const U32& value);
 
@@ -194,6 +198,7 @@ public:
     [[nodiscard]] Value IMulExt(const U32& a, const U32& b, bool is_signed = false);
     [[nodiscard]] U32U64 IMul(const U32U64& a, const U32U64& b);
     [[nodiscard]] U32 IDiv(const U32& a, const U32& b, bool is_signed = false);
+    [[nodiscard]] U32 IMod(const U32& a, const U32& b, bool is_signed = false);
     [[nodiscard]] U32U64 INeg(const U32U64& value);
     [[nodiscard]] U32 IAbs(const U32& value);
     [[nodiscard]] U32U64 ShiftLeftLogical(const U32U64& base, const U32& shift);
@@ -272,20 +277,25 @@ public:
     [[nodiscard]] Value ImageAtomicExchange(const Value& handle, const Value& coords,
                                             const Value& value, TextureInstInfo info);
 
+    [[nodiscard]] Value ImageSampleRaw(const Value& handle, const Value& address1,
+                                       const Value& address2, const Value& address3,
+                                       const Value& address4, TextureInstInfo info);
+
     [[nodiscard]] Value ImageSampleImplicitLod(const Value& handle, const Value& body,
-                                               const F32& bias, const U32& offset,
+                                               const F32& bias, const Value& offset,
                                                TextureInstInfo info);
 
     [[nodiscard]] Value ImageSampleExplicitLod(const Value& handle, const Value& body,
-                                               const U32& offset, TextureInstInfo info);
+                                               const F32& lod, const Value& offset,
+                                               TextureInstInfo info);
 
-    [[nodiscard]] F32 ImageSampleDrefImplicitLod(const Value& handle, const Value& body,
-                                                 const F32& dref, const F32& bias,
-                                                 const U32& offset, TextureInstInfo info);
+    [[nodiscard]] Value ImageSampleDrefImplicitLod(const Value& handle, const Value& body,
+                                                   const F32& dref, const F32& bias,
+                                                   const Value& offset, TextureInstInfo info);
 
-    [[nodiscard]] F32 ImageSampleDrefExplicitLod(const Value& handle, const Value& body,
-                                                 const F32& dref, const U32& offset,
-                                                 TextureInstInfo info);
+    [[nodiscard]] Value ImageSampleDrefExplicitLod(const Value& handle, const Value& body,
+                                                   const F32& dref, const F32& lod,
+                                                   const Value& offset, TextureInstInfo info);
 
     [[nodiscard]] Value ImageQueryDimension(const Value& handle, const U32& lod,
                                             const U1& skip_mips);
@@ -301,11 +311,15 @@ public:
     [[nodiscard]] Value ImageFetch(const Value& handle, const Value& coords, const Value& offset,
                                    const U32& lod, const U32& multisampling, TextureInstInfo info);
     [[nodiscard]] Value ImageGradient(const Value& handle, const Value& coords,
-                                      const Value& derivatives, const Value& offset,
-                                      const F32& lod_clamp, TextureInstInfo info);
+                                      const Value& derivatives_dx, const Value& derivatives_dy,
+                                      const Value& offset, const F32& lod_clamp,
+                                      TextureInstInfo info);
     [[nodiscard]] Value ImageRead(const Value& handle, const Value& coords, TextureInstInfo info);
     void ImageWrite(const Value& handle, const Value& coords, const Value& color,
                     TextureInstInfo info);
+
+    void EmitVertex();
+    void EmitPrimitive();
 
 private:
     IR::Block::iterator insertion_point;

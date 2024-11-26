@@ -1,10 +1,13 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <SDL3/SDL.h>
-#include "core/libraries/kernel/time_management.h"
+#include "controller.h"
+
+#include "common/assert.h"
+#include "core/libraries/kernel/time.h"
 #include "core/libraries/pad/pad.h"
-#include "input/controller.h"
+
+#include <SDL3/SDL.h>
 
 namespace Input {
 
@@ -127,7 +130,7 @@ void GameController::SetLightBarRGB(u8 r, u8 g, u8 b) {
 bool GameController::SetVibration(u8 smallMotor, u8 largeMotor) {
     if (m_sdl_gamepad != nullptr) {
         return SDL_RumbleGamepad(m_sdl_gamepad, (smallMotor / 255.0f) * 0xFFFF,
-                                 (largeMotor / 255.0f) * 0xFFFF, -1) == 0;
+                                 (largeMotor / 255.0f) * 0xFFFF, -1);
     }
     return true;
 }
@@ -155,6 +158,25 @@ void GameController::TryOpenSDLController() {
 
         SetLightBarRGB(0, 0, 255);
     }
+}
+
+u32 GameController::Poll() {
+    if (m_connected) {
+        auto time = Libraries::Kernel::sceKernelGetProcessTime();
+        if (m_states_num == 0) {
+            auto diff = (time - m_last_state.time) / 1000;
+            if (diff >= 100) {
+                AddState(GetLastState());
+            }
+        } else {
+            auto index = (m_first_state - 1 + m_states_num) % MAX_STATES;
+            auto diff = (time - m_states[index].time) / 1000;
+            if (m_private[index].obtained && diff >= 100) {
+                AddState(GetLastState());
+            }
+        }
+    }
+    return 100;
 }
 
 } // namespace Input

@@ -21,9 +21,15 @@ extern void assert_fail_debug_msg(const char* msg);
         }                                                                                          \
     }())
 
-#define IMGUI_USE_WCHAR32
 #define IMGUI_ENABLE_STB_TRUETYPE
 #define IMGUI_DEFINE_MATH_OPERATORS
 
 #define IM_VEC2_CLASS_EXTRA                                                                        \
     constexpr ImVec2(float _v) : x(_v), y(_v) {}
+
+#define IM_VEC4_CLASS_EXTRA                                                                        \
+    constexpr ImVec4(float _v) : x(_v), y(_v), z(_v), w(_v) {}
+
+#ifdef IMGUI_USE_WCHAR32
+#error "This project uses 16 bits wchar standard like Orbis"
+#endif

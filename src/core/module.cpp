@@ -1,20 +1,20 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <xbyak/xbyak.h>
+#include <cryptopp/sha.h>
+
 #include "common/alignment.h"
 #include "common/arch.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
-#ifdef ENABLE_QT_GUI
-#include "qt_gui/memory_patcher.h"
-#endif
+#include "common/memory_patcher.h"
 #include "common/string_util.h"
 #include "core/aerolib/aerolib.h"
 #include "core/cpu_patches.h"
 #include "core/loader/dwarf.h"
 #include "core/memory.h"
 #include "core/module.h"
+#include "core/tls.h"
 
 namespace Core {
 
@@ -58,6 +58,30 @@ static std::string EncodeId(u64 nVal) {
     return enc;
 }
 
+static std::string StringToNid(std::string_view symbol) {
+    static constexpr std::array<u8, 16> Salt = {0x51, 0x8D, 0x64, 0xA6, 0x35, 0xDE, 0xD8, 0xC1,
+                                                0xE6, 0xB0, 0x39, 0xB1, 0xC3, 0xE5, 0x52, 0x30};
+    std::vector<u8> input(symbol.size() + Salt.size());
+    std::memcpy(input.data(), symbol.data(), symbol.size());
+    std::memcpy(input.data() + symbol.size(), Salt.data(), Salt.size());
+
+    std::array<u8, CryptoPP::SHA1::DIGESTSIZE> hash;
+    CryptoPP::SHA1().CalculateDigest(hash.data(), input.data(), input.size());
+
+    u64 digest;
+    std::memcpy(&digest, hash.data(), sizeof(digest));
+
+    static constexpr std::string_view codes =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-";
+    std::string dst(11, '\0');
+
+    for (int i = 0; i < 10; i++) {
+        dst[i] = codes[(digest >> (58 - i * 6)) & 0x3f];
+    }
+    dst[10] = codes[(digest & 0xf) * 4];
+    return dst;
+}
+
 Module::Module(Core::MemoryManager* memory_, const std::filesystem::path& file_, u32& max_tls_index)
     : memory{memory_}, file{file_}, name{file.stem().string()} {
     elf.Open(file);
@@ -73,7 +97,7 @@ Module::~Module() = default;
 s32 Module::Start(size_t args, const void* argp, void* param) {
     LOG_INFO(Core_Linker, "Module started : {}", name);
     const VAddr addr = dynamic_info.init_virtual_addr + GetBaseAddress();
-    return reinterpret_cast<EntryFunc>(addr)(args, argp, param);
+    return ExecuteGuest(reinterpret_cast<EntryFunc>(addr), args, argp, param);
 }
 
 void Module::LoadModuleToMemory(u32& max_tls_index) {
@@ -94,9 +118,11 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
     LoadOffset += CODE_BASE_INCR * (1 + aligned_base_size / CODE_BASE_INCR);
     LOG_INFO(Core_Linker, "Loading module {} to {}", name, fmt::ptr(*out_addr));
 
+#ifdef ARCH_X86_64
     // Initialize trampoline generator.
     void* trampoline_addr = std::bit_cast<void*>(base_virtual_addr + aligned_base_size);
-    Xbyak::CodeGenerator c(TrampolineSize, trampoline_addr);
+    RegisterPatchModule(*out_addr, aligned_base_size, trampoline_addr, TrampolineSize);
+#endif
 
     LOG_INFO(Core_Linker, "======== Load Module to Memory ========");
     LOG_INFO(Core_Linker, "base_virtual_addr ......: {:#018x}", base_virtual_addr);
@@ -137,7 +163,7 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
             add_segment(elf_pheader[i]);
 #ifdef ARCH_X86_64
             if (elf_pheader[i].p_flags & PF_EXEC) {
-                PatchInstructions(segment_addr, segment_file_size, c);
+                PrePatchInstructions(segment_addr, segment_file_size);
             }
 #endif
             break;
@@ -166,9 +192,7 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
             tls.align = elf_pheader[i].p_align;
             tls.image_virtual_addr = elf_pheader[i].p_vaddr + base_virtual_addr;
             tls.image_size = GetAlignedSize(elf_pheader[i]);
-            if (tls.image_size != 0) {
-                tls.modid = ++max_tls_index;
-            }
+            tls.modid = ++max_tls_index;
             LOG_INFO(Core_Linker, "TLS virtual address = {:#x}", tls.image_virtual_addr);
             LOG_INFO(Core_Linker, "TLS image size      = {}", tls.image_size);
             break;
@@ -199,7 +223,6 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
     const VAddr entry_addr = base_virtual_addr + elf.GetElfEntry();
     LOG_INFO(Core_Linker, "program entry addr ..........: {:#018x}", entry_addr);
 
-#ifdef ENABLE_QT_GUI
     if (MemoryPatcher::g_eboot_address == 0) {
         if (name == "eboot") {
             MemoryPatcher::g_eboot_address = base_virtual_addr;
@@ -207,7 +230,6 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
             MemoryPatcher::OnGameLoaded();
         }
     }
-#endif
 }
 
 void Module::LoadDynamicInfo() {
@@ -489,6 +511,17 @@ const LibraryInfo* Module::FindLibrary(std::string_view id) {
             return &export_libs[i];
         }
         i++;
+    }
+    return nullptr;
+}
+
+void* Module::FindByName(std::string_view name) {
+    const auto nid_str = StringToNid(name);
+    const auto symbols = export_sym.GetSymbols();
+    const auto it = std::ranges::find_if(
+        symbols, [&](const Loader::SymbolRecord& record) { return record.name.contains(nid_str); });
+    if (it != symbols.end()) {
+        return reinterpret_cast<void*>(it->virtual_address);
     }
     return nullptr;
 }
